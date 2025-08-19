@@ -1,0 +1,275 @@
+---
+title: "Dashboard: Reporting and communication"
+author: "Franco Bastida, francobastida"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: cosmo
+    orientation: columns
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+library(tidyverse)
+library(flexdashboard)
+library(table1)
+library(leaflet)
+library(plotly)
+library(DT)
+library(leaflet)
+library(sf)
+library(htmlwidgets)
+
+#ChatGPT was used for formatting throughout the creation of this dashboard
+
+#Additional flexdashboard package source: https://rstudio.github.io/flexdashboard/articles/using.html
+
+```
+
+**Policy data brief: Turbine energy production in Canada**
+
+The following information is part of a policy data brief providing an overview into the turbine energy production in Canada, considering MW capacity, project and provincial differences.
+
+Source: 2024 Canadian Wind Turbine Database.
+
+<br>
+
+Column {data-width=300}
+-----------------------------------------------------------------------
+
+### Interactive Table
+```{r}
+#0. Establishing a working data frame
+
+CAN_turbines <- read_csv("data/wind_turbine_df.csv")
+
+#1. Renaming and adjusting 
+CAN_turbines <- CAN_turbines %>%
+	{names(.)[1] <- "Province"; .} %>%
+	{names(.)[3] <- "Project Name"; .} %>%
+	{names(.)[4] <- "Total capacity, MW"; .}
+
+#2. Reformatting (before slicing) = total 319 turbine energy projects
+CAN_turbines_summary <- CAN_turbines %>%
+	group_by(`Project Name`) %>%
+	summarize(
+		Province = first(Province),
+		`Total capacity, MW` = round(sum(`Total capacity, MW`), 0),
+		`Turbines`= n(),
+		`Year Commissioned`= first(commissioning)
+	)
+
+#3. Individual slicing per top 50 with most and least capacity
+#Note: Some of these have 0 MW, despite having several turbines
+
+top50_capacity <- CAN_turbines_summary %>%
+	arrange(desc(`Total capacity, MW`)) %>%
+	slice_head(n = 50)
+
+least50_capacity <- CAN_turbines_summary %>%
+	arrange(`Total capacity, MW`) %>%
+	slice_head(n = 50)
+
+combined_capacity <- bind_rows(
+	top50_capacity %>% mutate(Rank = "Top 50"),
+	least50_capacity %>% mutate (Rank = "Least 50")
+)
+
+combined_capacity <- combined_capacity %>%
+	select(-`Year Commissioned`)
+
+#4. Interactive table using DT
+table_mostleast_energy <- datatable(
+	combined_capacity,
+	class = 'cell-border stripe',
+	filter = "top",
+	options = list(
+		pageLength = 10,
+		lengthMenu = c(5, 10, 20, 50),
+		paging = TRUE),
+	caption = htmltools::tags$caption(
+		style = 'caption-side: top; text-align: left; font-weight: bold;',
+		'Canada: Projects with the most/least energy production.')
+)
+
+table_mostleast_energy
+```
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+
+### Interactive Plot: Number of Turbines by Province
+```{r}
+#Plot 1: Number of Turbines by province
+
+#Pre-work to aggregate the Turbines by Province and Total Numbers
+aggregated_turbines <- CAN_turbines_summary %>%
+  group_by(Province) %>%
+  summarize(
+    `Total Turbines` = sum(Turbines),
+    `Total capacity, MW` = sum(`Total capacity, MW`))%>%
+	mutate(Province = reorder(Province, `Total Turbines`))
+
+#Turbines plot with the aggregate data, coloring by gradient
+turbines_plot <- ggplot(aggregated_turbines, aes(
+	x = Province,
+	y = `Total Turbines`,
+	fill = `Total Turbines`,
+	text = paste(
+    "Province:", Province, "<br>",
+    "Total Turbines:", `Total Turbines`, "<br>",
+    "Total Capacity (MW):", `Total capacity, MW`)
+		)) +
+	geom_bar(stat = "identity") +
+	scale_fill_gradient(low = "lightblue", high = "darkblue") +
+	coord_flip() +
+	labs(
+		title = "Number of Turbines, by Canadian Province",
+		x = "Province",
+		y = "Number of Turbines") +
+	theme_minimal() +
+	theme(
+    axis.text.y = element_text(margin = margin(r = 10)),  
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 20),
+    axis.title.y = element_text(margin = margin(r = 10))
+  )
+
+#Adding plotly, but with fixes to the layout
+
+interactive_turbines_plot <- ggplotly(turbines_plot, tooltip = "text") %>%
+	layout(
+		yaxis = list(
+		title = list(
+			text = "Province",  
+			standoff = 2,      
+			font = list(size = 15)
+      )),
+		xaxis = list(
+      title = list(
+        text = "Number of Turbines",
+        font = list(size = 15)
+      ))
+  )
+
+interactive_turbines_plot
+
+```
+
+-----------------------------------------------------------------------
+
+### Interactive Plot: Turbines Commissioned, by Year
+
+```{r}
+#Plot 2: Number of Turbines commissioned, by year
+
+#Valid subset with turbines in a year by Project and Province
+grouped_year_turbines <- CAN_turbines_summary %>%
+	group_by(`Year Commissioned`, Province) %>%
+	summarize(
+		`Total Turbines` = sum(Turbines),
+    `Total capacity, MW` = sum(`Total capacity, MW`),
+		.groups = "drop"
+	)
+		
+#Transformation to have a cleaner plot (after testing)
+grouped_year_turbines <- grouped_year_turbines %>%
+	mutate(`Year Commissioned` = if_else(
+    str_detect(`Year Commissioned`, "/"),  #To detect rows with /
+    str_replace(
+      `Year Commissioned`,
+      "([0-9]{4})/([0-9]{2})([0-9]{2})$",  #To match the years
+      "\\1-\\3"  #To keep the full first year and the last two digits after / 
+    ),
+    `Year Commissioned`  # Leave unchanged if no "/"
+  ))
+
+#Turbines commissioned by year with the aggregate data, coloring by gradient
+years_comissioned_plot <- ggplot(grouped_year_turbines, aes(
+		x = `Year Commissioned`,
+		y = Province,
+		fill = `Total Turbines`,
+		text = paste(
+			"Year:", `Year Commissioned`, "<br>",
+			"Turbines:", `Total Turbines`, "<br>",
+			"Province:", Province)
+		)) +
+	geom_tile(color = "white") +
+	scale_fill_gradient(low = "lightblue", high = "darkblue") +
+	labs(title = "Number of Turbines Commissioned, by Year",
+			 x = "Year",
+			 y = "Province",
+			 fill = "Total Turbines"
+			 ) +
+	theme_minimal() +
+	theme(axis.text.x = element_text(angle = 90, hjust = 1)
+				)
+
+#Adding plotly, but with fixes to the layout
+interactive_commissioned_plot <- ggplotly(years_comissioned_plot, tooltip = "text") %>%
+	layout(
+		yaxis = list(
+		title = list(
+			text = "Province",  
+			standoff = 2,      
+			font = list(size = 15)
+      )),
+		xaxis = list(
+      title = list(
+        text = "Number of Turbines",
+        standoff = 5,      
+        font = list(size = 15)
+      ))
+  )
+
+interactive_commissioned_plot
+```
+
+Column {data-width=400}
+-----------------------------------------------------------------------
+
+### Interactive Turbine Map
+```{r}
+#Leaflet Map 3: Individual Wind Turbines in Saskatchewan
+
+#Valid subset with individual subset for Saskatchewan: 241 turbines
+
+saskatchewan_subset <- subset(CAN_turbines, CAN_turbines$Province == "Saskatchewan")
+
+saskatchewan_subset <- saskatchewan_subset %>%
+	{names(.)[14] <- "lat"; .} %>%
+	{names(.)[15] <- "lng"; .} %>%
+  mutate(lng = as.numeric(lng), lat = as.numeric(lat), turbine_rated_capacity_k_w = as.numeric(turbine_rated_capacity_k_w))
+
+#Setting the Bolt icon
+boltIcon <- makeAwesomeIcon(
+  icon = 'bolt',
+  markerColor = "red",
+  iconColor = "white",
+  library = "fa"
+)
+
+#Creating a custom pop up with individual information
+saskatchewan_subset <- saskatchewan_subset %>%
+  mutate(
+    custom_popup = paste0(
+      "<b>Turbine ID:</b> ", turbine_identifier, "<br>",
+      "This turbine has a capacity of ", turbine_rated_capacity_k_w, " kW<br>",
+      "It is a ", model, " manufactured by ", manufacturer, ".<br>",
+      "<b>Commissioning Year:</b> ", commissioning,"."
+    )
+  )
+
+#Test of base Map with multiple markets
+leaflet(saskatchewan_subset) %>%
+  addTiles() %>%
+  setView(lng = -105.5000, lat = 50.5000, zoom = 7) %>%
+  addAwesomeMarkers(
+    lng = ~lng,
+    lat = ~lat,
+    popup = ~custom_popup,
+    label = ~turbine_identifier,
+    icon = boltIcon
+  )
+```
+

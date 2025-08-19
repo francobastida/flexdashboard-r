@@ -3,6 +3,7 @@
 This repository contains an interactive dashboard built in R/R Markdown using flexdashboard as part of the coursework for Introduction to Data Science at the Hertie School. The project provides a policy data brief on turbine energy production in Canada, highlighting capacity, project-level, and provincial differences.
 
 Author: Franco Bastida
+
 Source data: 2024 Canadian Wind Turbine Database
 
 ***
